@@ -2,7 +2,7 @@ import os
 import sys
 import time 
 
-# --- 1. CONFIGURAÇÕES DE AMBIENTE ---
+# --- 1. CONFIGURAÇÕES DE AMBIENTE (ANTI-TRAVAMENTO) ---
 os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "true"
 os.environ["OTEL_SDK_DISABLED"] = "true"
 
@@ -10,6 +10,7 @@ import streamlit as st
 from crewai import Crew, Process
 from agents import CWSCrewAgents
 from tasks import CWSCrewTasks
+# Importamos as ferramentas blindadas
 from tools import create_jira_issue_manual, get_jira_projects, get_jira_priorities, get_project_custom_fields_meta
 from file_handler import extract_text_from_file, generate_docx, generate_pdf
 from dotenv import load_dotenv
@@ -28,7 +29,7 @@ def local_css():
         h3 {color: #17A589;}
         .stSpinner > div {border-top-color: #2874A6 !important;}
         
-        /* Destaque para campos obrigatórios */
+        /* Destaque visual para campos obrigatórios */
         label:after {
             content: " *";
             color: red;
@@ -38,13 +39,15 @@ def local_css():
     """, unsafe_allow_html=True)
 
 def extract_title_from_story(story_text):
+    """Extrai a primeira linha do texto gerado para usar como título sugerido"""
     if not story_text: return ""
     first_line = story_text.strip().split('\n')[0]
     clean_title = first_line.replace('#', '').replace('*', '').strip()
-    return clean_title[:254]
+    return clean_title[:254] # Limite do Jira
 
 def main():
-    st.set_page_config(page_title="CWS Workspace", page_icon="🚀", layout="wide")
+    # Configuração da Página
+    st.set_page_config(page_title="CWS PM Assistant", page_icon="🚀", layout="wide")
     local_css() 
 
     # --- CONFIG ---
@@ -52,7 +55,7 @@ def main():
     API_KEY = os.getenv("GOOGLE_API_KEY")
     JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "CWS")
 
-    # --- CARREGAMENTO DE DADOS JIRA ---
+    # --- CARREGAMENTO DE DADOS JIRA (CACHEADO) ---
     @st.cache_data(ttl=3600)
     def load_jira_data():
         if os.getenv("JIRA_SERVER_URL"):
@@ -61,6 +64,7 @@ def main():
 
     available_projects, available_priorities = load_jira_data()
     
+    # Fallbacks de segurança
     if not available_projects: available_projects = {"CWS": "CWS Default"}
     if not available_priorities: available_priorities = ["Medium"]
 
@@ -75,15 +79,15 @@ def main():
             st.error("Google Gemini: Desconectado 🔴")
             
         st.info(f"Jira Spaces: **{len(available_projects)}**")
-        st.caption("v2.9.0 - Strict Validation")
+        st.caption("v3.2.1 - Clean UI")
 
     if not API_KEY:
-        st.warning("⚠️ Sistema Pausado: Configure a API Key no arquivo .env")
+        st.warning("⚠️ Sistema Pausado: Configure a API Key no arquivo .env ou Secrets.")
         st.stop()
 
     # --- CABEÇALHO ---
-    st.markdown("# 🚀 CWS Factory: Jornada Unificada")
-    st.markdown("##### Transforme inputs brutos em especificações de produto de alto nível.")
+    st.markdown("# 🚀 CWS PM Assistant")
+    st.markdown("##### Seu copiloto de Produto para transformar inputs de Discovery em Histórias de Usuário técnicas, validadas e integradas ao Jira.")
     st.divider()
 
     # --- 1. ÁREA DE INPUT ---
@@ -95,23 +99,44 @@ def main():
     with input_container:
         tab1, tab2 = st.tabs(["📝 Digitar Contexto", "📂 Upload de Arquivo"])
         
+        # ABA 1: Texto
         with tab1:
-            manual_text = st.text_area("Descreva a necessidade de negócio, dores e regras:", height=200, placeholder="Ex: Como vendedor, quero poder aprovar o frete...")
+            manual_text = st.text_area(
+                "Descreva a necessidade de negócio:", 
+                height=200, 
+                placeholder="Ex: Como vendedor, quero poder aprovar o frete...",
+                key="input_manual"
+            )
         
+        # ABA 2: Arquivo
         with tab2:
-            uploaded_file = st.file_uploader("Arraste documentos (PDF, DOCX, PPTX, Excel, TXT)", type=["docx", "pdf", "txt", "md", "pptx", "xlsx", "xls"])
+            uploaded_file = st.file_uploader(
+                "Arraste documentos (PDF, DOCX, PPTX, Excel, TXT)", 
+                type=["docx", "pdf", "txt", "md", "pptx", "xlsx", "xls"],
+                key="input_file"
+            )
+            
+            # Lógica de processamento imediato do arquivo
             if uploaded_file:
-                with st.spinner("Processando documento..."):
+                with st.spinner("Lendo arquivo..."):
                     extracted_text = extract_text_from_file(uploaded_file)
-                    st.success(f"✅ **{uploaded_file.name}** processado com sucesso!")
-                    with st.expander("Ver conteúdo extraído"):
-                        st.text(extracted_text[:1000] + "...")
-                    
-                    final_input_text = f"ARQUIVO ({uploaded_file.name}):\n{extracted_text}"
-                    if manual_text:
-                        final_input_text += f"\n\nOBSERVAÇÕES MANUAIS:\n{manual_text}"
+                
+                # Feedback simples, sem mostrar o texto
+                st.success(f"✅ Arquivo **{uploaded_file.name}** carregado com sucesso!")
+                
+                final_input_text = f"ARQUIVO ({uploaded_file.name}):\n{extracted_text}"
+                
+                # Se tiver texto manual também, concatena
+                if manual_text:
+                    final_input_text += f"\n\nOBSERVAÇÕES MANUAIS:\n{manual_text}"
             else:
                 final_input_text = manual_text
+
+    # Feedback visual fora das abas para confirmar a fonte
+    if uploaded_file:
+        st.info(f"📎 **Fonte de Dados:** Utilizando arquivo '{uploaded_file.name}' como base principal.")
+    elif manual_text:
+        st.info("✍️ **Fonte de Dados:** Utilizando texto digitado manualmente.")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -132,16 +157,19 @@ def main():
                 
                 with st.spinner("Analisando contexto, consultando documentação e escrevendo Gherkin... Por favor, aguarde."):
                     try:
+                        # Instancia Agentes
                         agents = CWSCrewAgents(google_api_key=API_KEY, model_name=MODEL_NAME)
                         analyst = agents.context_interpreter_agent()
                         architect = agents.story_architect_agent()
                         gatekeeper = agents.gatekeeper_agent()
 
+                        # Define Tarefas
                         tasks = CWSCrewTasks()
                         t1 = tasks.analysis_task(analyst, final_input_text)
                         t2 = tasks.drafting_task(architect, [t1])
                         t3 = tasks.publication_task(gatekeeper, [t2], "CWS-Plataform")
 
+                        # Executa Crew
                         crew = Crew(
                             agents=[analyst, architect, gatekeeper],
                             tasks=[t1, t2, t3],
@@ -151,6 +179,7 @@ def main():
 
                         result = crew.kickoff()
                         
+                        # Salva Resultado na Sessão
                         st.session_state['final_story'] = result.raw
                         st.session_state['task_outputs'] = [t1.output.raw, t2.output.raw]
                         st.session_state['auto_title'] = extract_title_from_story(result.raw)
@@ -203,21 +232,21 @@ def main():
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 4. JIRA CONTAINER
+        # --- 4. JIRA CONTAINER (COM VALIDAÇÃO) ---
         jira_container = st.container(border=True)
         with jira_container:
             st.markdown("### 🚀 Publicar no Jira")
             st.caption("Todos os campos marcados com * são obrigatórios.")
             
-            # --- LINHA 1: Título e Squad ---
+            # LINHA 1: Título e Squad
             j_col1, j_col2 = st.columns([3, 2])
             
             with j_col1:
                 default_title = st.session_state.get('auto_title', "")
-                ticket_title = st.text_input("1. Resumo (Título) *", value=default_title, placeholder="Digite o título da demanda...")
+                ticket_title = st.text_input("1. Resumo (Título da Demanda) *", value=default_title, placeholder="Digite o título...")
             
             with j_col2:
-                # SQUAD: index=None faz vir VAZIO
+                # SQUAD (Vazio por padrão)
                 project_options = list(available_projects.keys())
                 def format_func(key):
                     return f"{key} - {available_projects[key]}"
@@ -226,11 +255,12 @@ def main():
                     "2. Espaço (Squad) *", 
                     options=project_options, 
                     format_func=format_func,
-                    index=None, # VAZIO POR PADRÃO
+                    index=None, # Força o usuário a escolher
                     placeholder="Selecione a Squad..."
                 )
             
-            # --- LÓGICA DE METADADOS (Só roda se Squad selecionada) ---
+            # --- BUSCA DINÂMICA DE METADADOS ---
+            # Só busca se uma Squad foi selecionada
             meta_fields = {}
             client_options = []
             param_options = ["Sim", "Não"]
@@ -240,33 +270,37 @@ def main():
             if selected_project_key:
                 with st.spinner(f"Carregando campos da Squad {selected_project_key}..."):
                     meta_fields = get_project_custom_fields_meta(selected_project_key)
-                    
-                    # Recupera lista de clientes do Jira
+                    # Popula opções vindas do Jira
                     client_options = meta_fields.get("client", {}).get("options", [])
                     client_id = meta_fields.get("client", {}).get("id")
-                    
-                    # Recupera opções de Parametrização
                     param_options = meta_fields.get("param", {}).get("allowed_values", ["Sim", "Não"])
                     param_id = meta_fields.get("param", {}).get("id")
             
-            # --- LINHA 2: Prioridade, Cliente e Parametrização ---
+            # LINHA 2: Prioridade, Cliente e Parametrização
             j_col3, j_col4, j_col5 = st.columns([1, 1, 1])
             
             with j_col3:
-                # Prioridade pode ter default, geralmente Medium
-                priority = st.selectbox("3. Prioridade *", available_priorities, index=0)
+                # Prioridade (Vazio por padrão)
+                priority = st.selectbox(
+                    "3. Prioridade *", 
+                    available_priorities, 
+                    index=None,
+                    placeholder="Selecione..."
+                )
 
             with j_col4:
-                # CLIENTE: index=None faz vir VAZIO
+                # CLIENTE (Vazio por padrão)
+                client_placeholder = "Selecione a Squad antes" if not selected_project_key else "Selecione..."
                 client_sponsor = st.selectbox(
                     "4. Cliente / Sponsor *", 
                     options=client_options,
-                    index=None, # VAZIO POR PADRÃO
-                    placeholder="Selecione..." if selected_project_key else "Selecione a Squad antes"
+                    index=None, 
+                    placeholder=client_placeholder,
+                    disabled=(not selected_project_key) # Trava se não tiver Squad
                 )
             
             with j_col5:
-                # Parametrização (Radio já seleciona um por padrão, mas ok)
+                # PARAMETRIZAÇÃO
                 needs_param_str = st.radio("5. Parametrização? *", param_options, horizontal=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
@@ -274,21 +308,17 @@ def main():
             # --- BOTÃO COM VALIDAÇÃO ---
             if st.button("Confirmar e Criar Ticket Jira ➔", type="primary", use_container_width=True):
                 
-                # VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS
+                # Validação de Obrigatórios
                 missing_fields = []
-                if not ticket_title: missing_fields.append("Título")
-                if not selected_project_key: missing_fields.append("Squad")
+                if not ticket_title: missing_fields.append("Resumo")
+                if not selected_project_key: missing_fields.append("Espaço (Squad)")
+                if not priority: missing_fields.append("Prioridade")
                 if not client_sponsor: missing_fields.append("Cliente/Sponsor")
                 
                 if missing_fields:
-                    st.error(f"❌ Campos obrigatórios não preenchidos: {', '.join(missing_fields)}")
+                    st.error(f"❌ Campos obrigatórios faltando: {', '.join(missing_fields)}")
                 else:
-                    # Se validou, prossegue
-                    custom_ids = {
-                        "client_id": client_id,
-                        "param_id": param_id
-                    }
-                    
+                    # Envio
                     ticket_id, ticket_link = create_jira_issue_manual(
                         project_key=selected_project_key, 
                         summary=ticket_title, 
