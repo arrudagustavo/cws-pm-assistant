@@ -10,7 +10,6 @@ import streamlit as st
 from crewai import Crew, Process
 from agents import CWSCrewAgents
 from tasks import CWSCrewTasks
-# Importamos as funções atualizadas
 from tools import create_jira_issue_manual, get_jira_projects, get_jira_priorities, get_project_custom_fields_meta
 from file_handler import extract_text_from_file, generate_docx, generate_pdf
 from dotenv import load_dotenv
@@ -28,6 +27,13 @@ def local_css():
         h2 {color: #2874A6; font-size: 1.8rem; margin-top: 20px;}
         h3 {color: #17A589;}
         .stSpinner > div {border-top-color: #2874A6 !important;}
+        
+        /* Destaque para campos obrigatórios */
+        label:after {
+            content: " *";
+            color: red;
+            visibility: hidden; 
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -69,7 +75,7 @@ def main():
             st.error("Google Gemini: Desconectado 🔴")
             
         st.info(f"Jira Spaces: **{len(available_projects)}**")
-        st.caption("v2.8.0 - Multi-Select Support")
+        st.caption("v2.9.0 - Strict Validation")
 
     if not API_KEY:
         st.warning("⚠️ Sistema Pausado: Configure a API Key no arquivo .env")
@@ -201,68 +207,109 @@ def main():
         jira_container = st.container(border=True)
         with jira_container:
             st.markdown("### 🚀 Publicar no Jira")
+            st.caption("Todos os campos marcados com * são obrigatórios.")
             
             # --- LINHA 1: Título e Squad ---
             j_col1, j_col2 = st.columns([3, 2])
             
             with j_col1:
-                default_title = st.session_state.get('auto_title', "Nova Funcionalidade")
-                ticket_title = st.text_input("1. Resumo (Título da Demanda) *", value=default_title)
+                default_title = st.session_state.get('auto_title', "")
+                ticket_title = st.text_input("1. Resumo (Título) *", value=default_title, placeholder="Digite o título da demanda...")
             
             with j_col2:
+                # SQUAD: index=None faz vir VAZIO
                 project_options = list(available_projects.keys())
                 def format_func(key):
                     return f"{key} - {available_projects[key]}"
-                selected_project_key = st.selectbox("2. Espaço (Squad) *", options=project_options, format_func=format_func)
+                
+                selected_project_key = st.selectbox(
+                    "2. Espaço (Squad) *", 
+                    options=project_options, 
+                    format_func=format_func,
+                    index=None, # VAZIO POR PADRÃO
+                    placeholder="Selecione a Squad..."
+                )
             
-            # --- BUSCA DINÂMICA (METADADOS) ---
-            with st.spinner(f"Buscando campos do projeto {selected_project_key}..."):
-                # Retorna os metadados completos (ID + Opções + Se é Array)
-                meta_fields = get_project_custom_fields_meta(selected_project_key)
+            # --- LÓGICA DE METADADOS (Só roda se Squad selecionada) ---
+            meta_fields = {}
+            client_options = []
+            param_options = ["Sim", "Não"]
+            client_id = None
+            param_id = None
+            
+            if selected_project_key:
+                with st.spinner(f"Carregando campos da Squad {selected_project_key}..."):
+                    meta_fields = get_project_custom_fields_meta(selected_project_key)
+                    
+                    # Recupera lista de clientes do Jira
+                    client_options = meta_fields.get("client", {}).get("options", [])
+                    client_id = meta_fields.get("client", {}).get("id")
+                    
+                    # Recupera opções de Parametrização
+                    param_options = meta_fields.get("param", {}).get("allowed_values", ["Sim", "Não"])
+                    param_id = meta_fields.get("param", {}).get("id")
             
             # --- LINHA 2: Prioridade, Cliente e Parametrização ---
             j_col3, j_col4, j_col5 = st.columns([1, 1, 1])
             
             with j_col3:
-                priority = st.selectbox("3. Prioridade", available_priorities)
+                # Prioridade pode ter default, geralmente Medium
+                priority = st.selectbox("3. Prioridade *", available_priorities, index=0)
 
             with j_col4:
-                # Clientes
-                client_options = meta_fields.get("client", {}).get("options", [])
-                if not client_options:
-                    client_options = ["Outros/Não Identificado"]
-                client_sponsor = st.selectbox("4. Cliente / Sponsor *", client_options)
+                # CLIENTE: index=None faz vir VAZIO
+                client_sponsor = st.selectbox(
+                    "4. Cliente / Sponsor *", 
+                    options=client_options,
+                    index=None, # VAZIO POR PADRÃO
+                    placeholder="Selecione..." if selected_project_key else "Selecione a Squad antes"
+                )
             
             with j_col5:
-                # Parametrização
-                param_options = meta_fields.get("param", {}).get("allowed_values", ["Sim", "Não"])
-                needs_param_str = st.radio("5. Necessita Parametrização? *", param_options, horizontal=True)
+                # Parametrização (Radio já seleciona um por padrão, mas ok)
+                needs_param_str = st.radio("5. Parametrização? *", param_options, horizontal=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
             
+            # --- BOTÃO COM VALIDAÇÃO ---
             if st.button("Confirmar e Criar Ticket Jira ➔", type="primary", use_container_width=True):
-                # Passa o objeto meta_fields completo
-                ticket_id, ticket_link = create_jira_issue_manual(
-                    project_key=selected_project_key, 
-                    summary=ticket_title, 
-                    description=final_content_edited, 
-                    priority=priority,
-                    client_value=client_sponsor,
-                    param_value=needs_param_str,
-                    custom_field_meta=meta_fields # A ferramenta lida com a formatação (Array/Objeto)
-                )
                 
-                if ticket_id:
-                    st.balloons()
-                    st.markdown(f"""
-                    <div style="background-color: #D4EFDF; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #28B463;">
-                        <h2 style="color: #196F3D; margin:0;">✅ Ticket Criado!</h2>
-                        <h1 style="font-size: 50px; margin: 10px 0;">{ticket_id}</h1>
-                        <a href="{ticket_link}" target="_blank" style="font-size: 18px; color: #196F3D; font-weight: bold; text-decoration: none;">🔗 Clique para abrir no Jira</a>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS
+                missing_fields = []
+                if not ticket_title: missing_fields.append("Título")
+                if not selected_project_key: missing_fields.append("Squad")
+                if not client_sponsor: missing_fields.append("Cliente/Sponsor")
+                
+                if missing_fields:
+                    st.error(f"❌ Campos obrigatórios não preenchidos: {', '.join(missing_fields)}")
                 else:
-                    st.error(ticket_link)
+                    # Se validou, prossegue
+                    custom_ids = {
+                        "client_id": client_id,
+                        "param_id": param_id
+                    }
+                    
+                    ticket_id, ticket_link = create_jira_issue_manual(
+                        project_key=selected_project_key, 
+                        summary=ticket_title, 
+                        description=final_content_edited, 
+                        priority=priority,
+                        client_value=client_sponsor,
+                        param_value=needs_param_str,
+                        custom_field_meta=meta_fields
+                    )
+                    
+                    if ticket_id:
+                        st.balloons()
+                        st.markdown(f"""
+                        <div style="background-color: #D4EFDF; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #28B463;">
+                            <h2 style="color: #196F3D; margin:0;">✅ Ticket Criado!</h2>
+                            <h1 style="font-size: 50px; margin: 10px 0;">{ticket_id}</h1>
+                            <a href="{ticket_link}" target="_blank" style="font-size: 18px; color: #196F3D; font-weight: bold; text-decoration: none;">🔗 Clique para abrir no Jira</a>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.error(ticket_link)
 
 if __name__ == "__main__":
     main()
