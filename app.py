@@ -1,7 +1,7 @@
 import os
 import sys
 import time
-import base64 # <--- Nova importação necessária
+import base64 
 
 # --- 1. CONFIGURAÇÕES DE AMBIENTE (ANTI-TRAVAMENTO) ---
 os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "true"
@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- FUNÇÃO AUXILIAR PARA IMAGEM ESTÁTICA (SEM EXPANDIR) ---
+# --- FUNÇÃO AUXILIAR PARA IMAGEM ESTÁTICA ---
 def get_base64_of_bin_file(bin_file):
     """Lê um arquivo de imagem e converte para base64 para uso em HTML puro"""
     try:
@@ -28,21 +28,21 @@ def get_base64_of_bin_file(bin_file):
     except FileNotFoundError:
         return None
 
-# --- CSS CUSTOMIZADO (CWS THEME - FORCE LIGHT - NO SIDEBAR) ---
+# --- CSS CUSTOMIZADO ---
 def local_css():
     st.markdown("""
     <style>
         /* --- FORÇAR CORES DA MARCA --- */
         
-        /* Ajuste fino para inputs ficarem bem visíveis no fundo branco */
+        /* COR DE FUNDO DOS INPUTS: Cinza Claríssimo */
         .stTextArea textarea, .stTextInput input, .stSelectbox div[data-baseweb="select"] {
-            background-color: #FFFFFF !important;
+            background-color: #F8F9FA !important; 
             color: #333333 !important;
             border-color: #E0E0E0 !important;
         }
         
         /* Títulos */
-        h1 {color: #2C3E50 !important;} /* Cinza Chumbo para o Título Principal */
+        h1 {color: #2C3E50 !important;} 
         
         /* H2: O Roxo da marca CWS */
         h2 {color: #9B1C68 !important; font-size: 1.8rem; margin-top: 20px;} 
@@ -66,7 +66,6 @@ def local_css():
             transition: all 0.3s ease;
         }
 
-        /* Botão Primário (Roxo CWS) */
         div[data-testid="stButton"] > button[kind="primary"] {
             background-color: #9B1C68 !important;
             border: 1px solid #9B1C68 !important;
@@ -77,14 +76,13 @@ def local_css():
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
 
-        /* Botão Secundário (Cinza/Branco) */
         div[data-testid="stButton"] > button[kind="secondary"] {
             background-color: #FFFFFF !important;
             border: 1px solid #9B1C68 !important;
             color: #9B1C68 !important;
         }
         div[data-testid="stButton"] > button[kind="secondary"]:hover {
-            background-color: #FDF2F8 !important; /* Roxo muito clarinho no hover */
+            background-color: #FDF2F8 !important; 
         }
 
         /* Obrigatório Asterisco */
@@ -97,14 +95,18 @@ def local_css():
     """, unsafe_allow_html=True)
 
 def extract_title_from_story(story_text):
-    """Extrai a primeira linha do texto gerado para usar como título sugerido"""
+    """Extrai a primeira linha e limita a 100 caracteres"""
     if not story_text: return ""
     first_line = story_text.strip().split('\n')[0]
     clean_title = first_line.replace('#', '').replace('*', '').strip()
-    return clean_title[:254] # Limite do Jira
+    
+    # --- NOVA REGRA: LIMITAR A 100 CARACTERES ---
+    if len(clean_title) > 100:
+        return clean_title[:100]
+    return clean_title
 
 def main():
-    # Configuração da Página (Layout Wide, Sidebar colapsada por padrão)
+    # Configuração da Página
     st.set_page_config(page_title="CWS PM Assistant", page_icon="🚀", layout="wide", initial_sidebar_state="collapsed")
     local_css() 
 
@@ -113,7 +115,7 @@ def main():
     API_KEY = os.getenv("GOOGLE_API_KEY")
     JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "CWS")
 
-    # --- CARREGAMENTO DE DADOS JIRA (CACHEADO) ---
+    # --- CARREGAMENTO DE DADOS JIRA ---
     @st.cache_data(ttl=3600)
     def load_jira_data():
         if os.getenv("JIRA_SERVER_URL"):
@@ -130,7 +132,7 @@ def main():
         st.warning("⚠️ Sistema Pausado: Configure a API Key no arquivo .env ou Secrets.")
         st.stop()
 
-    # --- CABEÇALHO (LOGO VIA HTML PURO PARA NÃO EXPANDIR) ---
+    # --- CABEÇALHO ---
     col_header1, col_header2 = st.columns([3, 1]) 
 
     with col_header1:
@@ -138,8 +140,6 @@ def main():
         st.markdown("##### Seu copiloto de Produto para transformar inputs de Discovery em Histórias de Usuário técnicas.")
 
     with col_header2:
-        # Lógica: Lê a imagem, converte pra texto base64 e injeta via HTML
-        # Isso contorna o componente st.image() que adiciona o botão de expandir
         img_file = "logo-preto-platform.png"
         img_base64 = get_base64_of_bin_file(img_file)
         
@@ -149,7 +149,6 @@ def main():
                 unsafe_allow_html=True
             )
         else:
-            # Fallback caso a imagem não seja encontrada na pasta
             st.warning(f"Logo '{img_file}' não encontrado.")
 
     st.divider()
@@ -167,7 +166,7 @@ def main():
             manual_text = st.text_area(
                 "Descreva a necessidade de negócio:", 
                 height=200, 
-                placeholder="Ex: Como vendedor, quero poder aprovar o frete...",
+                placeholder="Ex: Como admin da plataforma, quero poder parametrizar...",
                 key="input_manual"
             )
         
@@ -208,7 +207,7 @@ def main():
         else:
             progress_placeholder = st.empty()
             with progress_placeholder.container():
-                st.info("🤖 **Squad CWS Iniciado:** Os agentes estão trabalhando nos requisitos...")
+                st.info("🤖 Os Agents da CWS estão trabalhando na sua história...")
                 
                 with st.spinner("Analisando contexto..."):
                     try:
@@ -354,7 +353,7 @@ def main():
                         summary=ticket_title, 
                         description=final_content_edited, 
                         priority=priority,
-                        client_value=client_sponsor,
+                        client_value=client_sponsor, 
                         param_value=needs_param_str,
                         custom_field_meta=meta_fields
                     )
