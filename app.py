@@ -1,6 +1,7 @@
 import os
 import sys
-import time 
+import time
+import base64 # <--- Nova importação necessária
 
 # --- 1. CONFIGURAÇÕES DE AMBIENTE (ANTI-TRAVAMENTO) ---
 os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "true"
@@ -17,7 +18,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- CSS CUSTOMIZADO (CWS THEME - FORCE LIGHT) ---
+# --- FUNÇÃO AUXILIAR PARA IMAGEM ESTÁTICA (SEM EXPANDIR) ---
+def get_base64_of_bin_file(bin_file):
+    """Lê um arquivo de imagem e converte para base64 para uso em HTML puro"""
+    try:
+        with open(bin_file, 'rb') as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except FileNotFoundError:
+        return None
+
+# --- CSS CUSTOMIZADO (CWS THEME - FORCE LIGHT - NO SIDEBAR) ---
 def local_css():
     st.markdown("""
     <style>
@@ -76,11 +87,6 @@ def local_css():
             background-color: #FDF2F8 !important; /* Roxo muito clarinho no hover */
         }
 
-        /* Sidebar: Forçar fundo cinza bem claro para contraste com o branco principal */
-        section[data-testid="stSidebar"] {
-            background-color: #F8F9FA !important;
-        }
-
         /* Obrigatório Asterisco */
         label:after {
             content: " *";
@@ -98,8 +104,8 @@ def extract_title_from_story(story_text):
     return clean_title[:254] # Limite do Jira
 
 def main():
-    # Configuração da Página
-    st.set_page_config(page_title="CWS PM Assistant", page_icon="🚀", layout="wide")
+    # Configuração da Página (Layout Wide, Sidebar colapsada por padrão)
+    st.set_page_config(page_title="CWS PM Assistant", page_icon="🚀", layout="wide", initial_sidebar_state="collapsed")
     local_css() 
 
     # --- CONFIG ---
@@ -119,27 +125,33 @@ def main():
     if not available_projects: available_projects = {"CWS": "CWS Default"}
     if not available_priorities: available_priorities = ["Medium"]
 
-    # --- SIDEBAR ---
-    with st.sidebar:
-        # Placeholder simulando o logo em fundo CLARO
-        st.image("https://placehold.co/200x80/F8F9FA/9B1C68/png?text=CWS+Digital", width=200) 
-        st.markdown("### ⚙️ Status do Sistema")
-        
-        if API_KEY:
-            st.success("Google Gemini: Conectado 🟢")
-        else:
-            st.error("Google Gemini: Desconectado 🔴")
-            
-        st.info(f"Jira Spaces: **{len(available_projects)}**")
-        st.caption("v3.4.0 - Force White Theme")
-
+    # --- VALIDAÇÃO DE API ---
     if not API_KEY:
         st.warning("⚠️ Sistema Pausado: Configure a API Key no arquivo .env ou Secrets.")
         st.stop()
 
-    # --- CABEÇALHO ---
-    st.markdown("# 🚀 CWS PM Assistant")
-    st.markdown("##### Seu copiloto de Produto para transformar inputs de Discovery em Histórias de Usuário técnicas.")
+    # --- CABEÇALHO (LOGO VIA HTML PURO PARA NÃO EXPANDIR) ---
+    col_header1, col_header2 = st.columns([3, 1]) 
+
+    with col_header1:
+        st.markdown("# 🚀 CWS PM Assistant")
+        st.markdown("##### Seu copiloto de Produto para transformar inputs de Discovery em Histórias de Usuário técnicas.")
+
+    with col_header2:
+        # Lógica: Lê a imagem, converte pra texto base64 e injeta via HTML
+        # Isso contorna o componente st.image() que adiciona o botão de expandir
+        img_file = "logo-preto-platform.png"
+        img_base64 = get_base64_of_bin_file(img_file)
+        
+        if img_base64:
+            st.markdown(
+                f'<div style="text-align: right;"><img src="data:image/png;base64,{img_base64}" width="180"></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            # Fallback caso a imagem não seja encontrada na pasta
+            st.warning(f"Logo '{img_file}' não encontrado.")
+
     st.divider()
 
     # --- 1. ÁREA DE INPUT ---
