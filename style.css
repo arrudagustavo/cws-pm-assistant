@@ -1,0 +1,76 @@
+/* style.css */
+.stTextArea textarea,
+.stTextInput input,
+.stSelectbox div[data-baseweb="select"] {
+    background-color: #F8F9FA !important;
+    color: #333333 !important;
+    border-color: #E0E0E0 !important;
+}
+
+h1 {
+    color: #2C3E50 !important;
+}
+
+h2 {
+    color: #9B1C68 !important;
+    font-size: 1.8rem;
+    margin-top: 20px;
+}
+
+h3 {
+    color: #7F8C8D !important;
+}
+
+a {
+    color: #9B1C68 !important;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+.stSpinner>div {
+    border-top-color: #9B1C68 !important;
+}
+
+.stButton button {
+    width: 100%;
+    border-radius: 6px;
+    height: 50px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+div[data-testid="stButton"]>button[kind="primary"] {
+    background-color: #9B1C68 !important;
+    border: 1px solid #9B1C68 !important;
+    color: white !important;
+}
+
+div[data-testid="stButton"]>button[kind="primary"]:hover {
+    background-color: #75124D !important;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+div[data-testid="stButton"]>button[kind="secondary"] {
+    background-color: #FFFFFF !important;
+    border: 1px solid #9B1C68 !important;
+    color: #9B1C68 !important;
+}
+
+div[data-testid="stButton"]>button[kind="secondary"]:hover {
+    background-color: #FDF2F8 !important;
+}
+
+label:after {
+    content: " *";
+    color: #9B1C68;
+    visibility: hidden;
+}
+
+/* Ajuste visual para o menu de navegação */
+div[role="radiogroup"] {
+    justify-content: center;
+    margin-bottom: 20px;
+}

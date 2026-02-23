@@ -1,175 +1,109 @@
 import os
+import re
+import unicodedata
 from atlassian import Jira
-from crewai.tools import BaseTool
-from pydantic import BaseModel, Field
+from crewai.tools import tool
+from pinecone import Pinecone
+from google import genai
+from dotenv import load_dotenv
 
-# --- CONEXÃO JIRA ---
-def _get_jira_client():
-    jira_url = os.environ.get("JIRA_SERVER_URL")
-    jira_user = os.environ.get("JIRA_EMAIL")
-    jira_token = os.environ.get("JIRA_API_TOKEN")
+load_dotenv()
 
-    if not all([jira_url, jira_user, jira_token]):
-        return None
-    return Jira(url=jira_url, username=jira_user, password=jira_token, cloud=True)
+# ==========================================
+# 1. MOTOR TÉCNICO (BUSCA VETORIAL 768)
+# ==========================================
 
-# --- LEITURAS BÁSICAS ---
-def get_jira_projects():
-    jira = _get_jira_client()
-    if not jira: return {}
+def get_query_embedding(text):
     try:
-        projects = jira.get("rest/api/2/project")
-        return {p['key']: p['name'] for p in projects}
-    except Exception as e:
-        print(f"Erro Projects: {e}")
-        return {"CWS": "CWS Default"}
+        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        result = client.models.embed_content(model="models/gemini-embedding-001", contents=text.replace('\x00', '').strip())
+        return result.embeddings[0].values[:768] 
+    except: return [0.0] * 768
+
+@tool("Consultar Base de Conhecimento CWS")
+def consultar_base_cws(query: str) -> str:
+    """Busca detalhes técnicos nos manuais da CWS."""
+    try:
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
+        vector = get_query_embedding(query)
+        res = index.query(vector=vector, top_k=10, include_metadata=True)
+        if not res['matches'] or res['matches'][0]['score'] < 0.35:
+            return "RESULTADO: Nada encontrado na base técnica."
+        return "\n\n---\n\n".join([f"[{m['metadata'].get('source')}]: {m['metadata']['text']}" for m in res['matches']])
+    except Exception as e: return f"Erro: {str(e)}"
+
+# ==========================================
+# 2. LÓGICA JIRA (COM COMENTÁRIO DE IA E FIX DE TEXTO)
+# ==========================================
+
+def _get_jira_client():
+    url, user, token = os.getenv("JIRA_SERVER_URL"), os.getenv("JIRA_EMAIL"), os.getenv("JIRA_API_TOKEN")
+    if not all([url, user, token]): return None
+    return Jira(url=url, username=user, password=token, cloud=True)
+
+def get_jira_projects():
+    j = _get_jira_client()
+    try:
+        projs = j.get("rest/api/2/project")
+        return {p['key']: p['name'] for p in projs}
+    except: return {"CWS": "CWS Default"}
 
 def get_jira_priorities():
-    jira = _get_jira_client()
-    if not jira: return []
+    j = _get_jira_client()
     try:
-        priorities = jira.get("rest/api/2/priority")
-        return [p['name'] for p in priorities]
-    except Exception as e:
-        print(f"Erro Priorities: {e}")
-        return ["Medium", "High"]
+        pris = j.get("rest/api/2/priority")
+        return [p['name'] for p in pris]
+    except: return ["High", "Medium", "Low"]
 
-# --- INTEGRAÇÃO AVANÇADA: METADADOS DE CAMPOS ---
 def get_project_custom_fields_meta(project_key):
-    """
-    Busca IDs, Opções e TIPO (Schema) dos campos personalizados.
-    Detecta se o campo exige uma matriz (array) ou valor único.
-    """
-    jira = _get_jira_client()
-    if not jira: return {}
-
-    meta_data = {
-        "client": {"id": None, "options": [], "is_array": False},
-        "param": {"id": None, "allowed_values": [], "is_array": False}
-    }
-
+    j = _get_jira_client()
+    meta = {"client": {"id": None, "options": []}, "param": {"id": None, "allowed_values": []}}
     try:
-        query = f"rest/api/2/issue/createmeta?projectKeys={project_key}&expand=projects.issuetypes.fields"
-        response = jira.get(query)
+        res = j.get(f"rest/api/2/issue/createmeta?projectKeys={project_key}&expand=projects.issuetypes.fields")
+        fields = res['projects'][0]['issuetypes'][0]['fields']
+        for fk, fi in fields.items():
+            n = fi['name'].lower()
+            if "cliente" in n: meta["client"] = {"id": fk, "options": [o['value'] for o in fi.get('allowedValues', [])], "is_array": (fi['schema']['type'] == 'array')}
+            if "parametri" in n: meta["param"] = {"id": fk, "allowed_values": [o['value'] for o in fi.get('allowedValues', [])], "is_array": (fi['schema']['type'] == 'array')}
+        return meta
+    except: return meta
 
-        if 'projects' not in response or len(response['projects']) == 0:
-            return meta_data
-
-        issue_types = response['projects'][0]['issuetypes']
-        
-        # Tenta achar o tipo História
-        story_type = next((it for it in issue_types if it['name'] in ['História', 'Story', 'User Story']), issue_types[0])
-        fields = story_type.get('fields', {})
-
-        for field_key, field_info in fields.items():
-            name = field_info['name'].lower()
-            schema_type = field_info.get('schema', {}).get('type', '')
-            
-            # --- CLIENTE/SPONSOR ---
-            if "cliente" in name or "sponsor" in name:
-                meta_data["client"]["id"] = field_key 
-                meta_data["client"]["is_array"] = (schema_type == 'array')
-                if 'allowedValues' in field_info:
-                    meta_data["client"]["options"] = [opt['value'] for opt in field_info['allowedValues']]
-            
-            # --- PARAMETRIZAÇÃO ---
-            if "parametrização" in name or "parametrizacao" in name:
-                meta_data["param"]["id"] = field_key
-                meta_data["param"]["is_array"] = (schema_type == 'array')
-                if 'allowedValues' in field_info:
-                     meta_data["param"]["allowed_values"] = [opt['value'] for opt in field_info['allowedValues']]
-
-        return meta_data
-
-    except Exception as e:
-        print(f"Erro ao buscar metadados: {e}")
-        return meta_data
-
-def _get_project_specific_story_id(jira, project_key):
-    try:
-        project_data = jira.get(f"rest/api/2/project/{project_key}")
-        if 'issueTypes' not in project_data: return "10001" 
-        issue_types = project_data['issueTypes']
-        target_names = ["História", "Story", "User Story", "Historia"]
-        for name in target_names:
-            for t in issue_types:
-                if t['name'].lower() == name.lower(): return t['id']
-        for t in issue_types:
-            if not t.get('subtask', False) and "bug" not in t['name'].lower(): return t['id']
-        return "10001"
-    except: return "10001"
-
-# --- CRIAÇÃO DE TICKET + COMENTÁRIO ---
 def create_jira_issue_manual(project_key, summary, description, priority, client_value=None, param_value=None, custom_field_meta=None):
-    jira = _get_jira_client()
-    if not jira: return None, "⚠️ Credenciais inválidas."
-
+    j = _get_jira_client()
     try:
-        # 1. Busca ID da História
-        story_id = _get_project_specific_story_id(jira, project_key)
+        pj = j.get(f"rest/api/2/project/{project_key}")
+        sid = next((t['id'] for t in pj['issueTypes'] if t['name'].lower() in ["story", "história"]), "10001")
+        
+        # --- FIX DE FORMATAÇÃO ---
+        clean_desc = description.replace('\r\n', '\n')
+        formatted_desc = re.sub(r'\n+', '\n\n', clean_desc).strip()
 
         issue_dict = {
-            'project': {'key': project_key},
-            'summary': summary,
-            'description': description, 
-            'issuetype': {'id': story_id},
-            'priority': {'name': priority},
+            'project': {'key': project_key}, 
+            'summary': summary, 
+            'description': formatted_desc, 
+            'issuetype': {'id': sid}, 
+            'priority': {'name': priority}
         }
-
-        # 2. Injeção Dinâmica
-        if custom_field_meta:
-            # Campo Cliente
-            c_meta = custom_field_meta.get('client', {})
-            c_id = c_meta.get('id')
-            if c_id and client_value:
-                payload_value = {'value': client_value}
-                if c_meta.get('is_array', False):
-                    issue_dict[c_id] = [payload_value]
-                else:
-                    issue_dict[c_id] = payload_value
-            
-            # Campo Parametrização
-            p_meta = custom_field_meta.get('param', {})
-            p_id = p_meta.get('id')
-            if p_id and param_value:
-                payload_value = {'value': param_value}
-                if p_meta.get('is_array', False):
-                    issue_dict[p_id] = [payload_value]
-                else:
-                    issue_dict[p_id] = payload_value
-
-        # 3. Cria o Ticket
-        new_issue = jira.issue_create(fields=issue_dict)
-        ticket_key = new_issue['key']
-
-        # --- 4. NOVO: ADICIONA O COMENTÁRIO AUTOMÁTICO ---
-        try:
-            jira.issue_add_comment(ticket_key, "História criada e adicionada ao JIRA via CWS PM Assistant.")
-            print(f"Comentário adicionado em {ticket_key}")
-        except Exception as e_comm:
-            # Não falha o processo se só o comentário der erro, apenas loga
-            print(f"⚠️ Aviso: Ticket criado, mas erro ao comentar: {e_comm}")
-
-        # 5. Retorno
-        base_url = os.environ.get('JIRA_SERVER_URL', '').rstrip('/')
-        ticket_link = f"{base_url}/browse/{ticket_key}"
         
-        return ticket_key, ticket_link
+        if custom_field_meta:
+            for k, val in [('client', client_value), ('param', param_value)]:
+                m = custom_field_meta.get(k, {})
+                if m.get('id') and val:
+                    v = {'value': val}
+                    issue_dict[m['id']] = [v] if m.get('is_array') else v
+        
+        # 1. Cria o Ticket
+        res = j.issue_create(fields=issue_dict)
+        ticket_key = res['key']
 
-    except Exception as e:
-        return None, f"❌ Erro do Jira: {str(e)}"
+        # 2. ADICIONA COMENTÁRIO DE IA (FUNCIONALIDADE RESTAURADA)
+        try:
+            comment_text = "✨ História criada e adicionada ao JIRA via CWS PM Assistant (AI Powered)."
+            j.issue_add_comment(ticket_key, comment_text)
+        except Exception as e_comm:
+            print(f"Erro ao adicionar comentário: {e_comm}")
 
-# --- TOOL ---
-class JiraToolInput(BaseModel):
-    summary: str = Field(..., description="Título")
-    description: str = Field(..., description="Conteúdo")
-    project_key: str = Field(..., description="Chave do Projeto")
-
-class CreateJiraTicketTool(BaseTool):
-    name: str = "Create Jira Ticket"
-    description: str = "Cria uma Story no Jira."
-    args_schema: type[BaseModel] = JiraToolInput
-
-    def _run(self, summary: str, description: str, project_key: str) -> str:
-        key, link = create_jira_issue_manual(project_key, summary, description, "Medium")
-        return f"Ticket criado: {key}" if key else link
+        return ticket_key, f"{os.getenv('JIRA_SERVER_URL').rstrip('/')}/browse/{ticket_key}"
+    except Exception as e: return None, str(e)
