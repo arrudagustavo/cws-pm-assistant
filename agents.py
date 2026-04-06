@@ -1,15 +1,14 @@
-from crewai import Agent
-from langchain_google_genai import ChatGoogleGenerativeAI
+from crewai import Agent, LLM
 # Importando a nova ferramenta do Pinecone
 from tools import consultar_base_cws 
 
 class CWSCrewAgents:
     def __init__(self, google_api_key: str, model_name: str = "gemini-2.0-flash"):
-        # Ajustado para gemini-2.0-flash que é a versão estável atual
-        self.llm = ChatGoogleGenerativeAI(
-            model=model_name,
-            google_api_key=google_api_key,
-            temperature=0.1 # Foco em precisão e obediência ao formato
+        # --- NOVO: Usando o objeto LLM nativo do CrewAI para evitar erro de validação ---
+        self.llm = LLM(
+            model=f"google_generative_ai/{model_name}",
+            api_key=google_api_key,
+            temperature=0.1
         )
 
     def context_interpreter_agent(self):
@@ -24,9 +23,7 @@ class CWSCrewAgents:
             llm=self.llm,
             tools=[consultar_base_cws], 
             allow_delegation=False,
-            verbose=True,
-            # Esta linha abaixo resolve o erro de ValidationError do Pydantic
-            config=dict(arbitrary_types_allowed=True)
+            verbose=True
         )
 
     def story_architect_agent(self):
@@ -60,15 +57,13 @@ class CWSCrewAgents:
             ### Cenários de Teste:
             **Cenário 1: [Nome do cenário]**
             Dado [contexto inicial]
-            Quando [action]
+            Quando [ação]
             Então [resultado esperado]
             """,
             llm=self.llm,
             tools=[consultar_base_cws], 
             allow_delegation=False,
-            verbose=True,
-            # Esta linha abaixo resolve o erro de ValidationError do Pydantic
-            config=dict(arbitrary_types_allowed=True)
+            verbose=True
         )
 
     def gatekeeper_agent(self):
@@ -82,7 +77,5 @@ class CWSCrewAgents:
             conteúdo dentro de cada seção esteja claro, bem escrito (em Português do Brasil) e pronto para o Jira.""",
             llm=self.llm,
             allow_delegation=False,
-            verbose=True,
-            # Esta linha abaixo resolve o erro de ValidationError do Pydantic
-            config=dict(arbitrary_types_allowed=True)
+            verbose=True
         )
