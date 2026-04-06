@@ -61,6 +61,26 @@ def extract_title_from_story(story_text):
             break
     return potential_title.replace('#', '').replace('*', '').strip()[:100]
 
+# --- NOVA FUNÇÃO: INJEÇÃO FORÇADA DE CONTEXTO ---
+def fetch_pinecone_context(query: str) -> str:
+    """Busca o contexto na Pinecone antes de acionar os Agentes"""
+    if not index_pinecone: return ""
+    try:
+        vector = get_embedding(query)
+        search_result = index_pinecone.query(vector=vector, top_k=5, include_metadata=True)
+        if not search_result['matches'] or search_result['matches'][0]['score'] < 0.35:
+            return ""
+        
+        context_blocks = []
+        for m in search_result['matches']:
+            if 'text' in m['metadata']:
+                source = m['metadata'].get('source', 'Documento Desconhecido')
+                context_blocks.append(f"[{source}]: {m['metadata']['text']}")
+        return "\n\n---\n\n".join(context_blocks)
+    except Exception as e:
+        print(f"Erro ao buscar contexto Pinecone: {e}")
+        return ""
+
 def main():
     st.set_page_config(page_title="CWS PM Assistant", page_icon="🚀", layout="wide", initial_sidebar_state="collapsed")
     try:
@@ -135,10 +155,27 @@ def main():
 
         if st.button("✨ GERAR HISTÓRIA DE USUÁRIO", type="primary", use_container_width=True):
             if len(final_input_text) > 10:
-                with st.spinner("🤖 Agentes CWS trabalhando..."):
+                with st.spinner("🤖 Consultando Base e Inicializando Agentes..."):
+                    
+                    # --- INJEÇÃO DE CONTEXTO ---
+                    pinecone_context = fetch_pinecone_context(final_input_text)
+                    
+                    if pinecone_context:
+                        # Se achou algo, empacota junto com a necessidade do usuário
+                        enriched_input = (
+                            f"NECESSIDADE DO USUÁRIO:\n{final_input_text}\n\n"
+                            f"REGRAS TÉCNICAS E CONTEXTO OBRIGATÓRIO (Base CWS):\n{pinecone_context}\n\n"
+                            "ATENÇÃO: Use obrigatoriamente as regras acima para gerar a história."
+                        )
+                        st.toast("✅ Base de conhecimento localizada e injetada no contexto!")
+                    else:
+                        enriched_input = final_input_text
+                        st.toast("ℹ️ Nenhuma regra técnica extra encontrada na Base.", icon="ℹ️")
+
+                    # O fluxo segue normal, mas agora com o `enriched_input`
                     agents = CWSCrewAgents(GOOGLE_API_KEY, "gemini-2.0-flash")
                     tasks = CWSCrewTasks()
-                    t1 = tasks.analysis_task(agents.context_interpreter_agent(), final_input_text)
+                    t1 = tasks.analysis_task(agents.context_interpreter_agent(), enriched_input)
                     t2 = tasks.drafting_task(agents.story_architect_agent(), [t1])
                     t3 = tasks.publication_task(agents.gatekeeper_agent(), [t2], "CWS")
                     crew = Crew(agents=[agents.context_interpreter_agent(), agents.story_architect_agent(), agents.gatekeeper_agent()], tasks=[t1, t2, t3], process=Process.sequential)
