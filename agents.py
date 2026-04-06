@@ -4,11 +4,11 @@ from tools import consultar_base_cws
 
 class CWSCrewAgents:
     def __init__(self, google_api_key: str, model_name: str = "gemini-2.0-flash"):
-        # --- NOVO: Usando o objeto LLM nativo do CrewAI para evitar erro de validação ---
+        # Usando o objeto LLM nativo com o prefixo 'gemini/' exigido pelo CrewAI
         self.llm = LLM(
-            model=f"google_generative_ai/{model_name}",
+            model=f"gemini/{model_name}",
             api_key=google_api_key,
-            temperature=0.1
+            temperature=0.1 # Foco em precisão e obediência ao formato
         )
 
     def context_interpreter_agent(self):
