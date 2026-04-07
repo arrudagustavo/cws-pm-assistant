@@ -3,6 +3,7 @@ import sys
 import base64 
 import unicodedata
 import re
+import time
 import streamlit as st
 from crewai import Crew, Process
 from agents import CWSCrewAgents
@@ -61,7 +62,6 @@ def extract_title_from_story(story_text):
             break
     return potential_title.replace('#', '').replace('*', '').strip()[:100]
 
-# --- INJEÇÃO FORÇADA DE CONTEXTO ---
 def fetch_pinecone_context(query: str) -> str:
     """Busca o contexto na Pinecone antes de acionar os Agentes"""
     if not index_pinecone: return ""
@@ -121,26 +121,32 @@ def main():
                             text = extract_text_from_file(f)
                             chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_text(text)
                             
-                            # --- CORREÇÃO: LÓGICA DE BATCHING (LOTES DE 50) ---
-                            batch_size = 50
-                            vectors = []
-                            for i, c in enumerate(chunks):
-                                vectors.append({
-                                    "id": f"{clean_filename(f.name)}_{i}", 
-                                    "values": get_embedding(c), 
-                                    "metadata": {"text": c, "source": f.name}
-                                })
-                                # Quando atingir 50, envia e limpa a lista
-                                if len(vectors) >= batch_size:
-                                    index_pinecone.upsert(vectors=vectors, namespace=f.name)
-                                    vectors = []
-                            
-                            # Envia os que sobraram no final
-                            if vectors:
-                                index_pinecone.upsert(vectors=vectors, namespace=f.name)
+                            # --- CORREÇÃO: TRATAMENTO DE ERRO EXPLÍCITO ---
+                            try:
+                                batch_size = 50
+                                vectors = []
+                                safe_namespace = clean_filename(f.name) # Força nome limpo para o Pinecone
+                                
+                                for i, c in enumerate(chunks):
+                                    vectors.append({
+                                        "id": f"{safe_namespace}_{i}", 
+                                        "values": get_embedding(c), 
+                                        "metadata": {"text": c, "source": f.name}
+                                    })
+                                    if len(vectors) >= batch_size:
+                                        index_pinecone.upsert(vectors=vectors, namespace=safe_namespace)
+                                        vectors = []
+                                        time.sleep(0.5) # Pausa de 0.5s para não tomar rate limit
+                                
+                                if vectors:
+                                    index_pinecone.upsert(vectors=vectors, namespace=safe_namespace)
+
+                                status.update(label=f"✅ {f.name} integrado!", state="complete")
+                            except Exception as e:
+                                status.update(label=f"❌ Erro ao enviar {f.name}", state="error")
+                                st.error(f"Erro detalhado do Pinecone: {str(e)}") # <- ISSO VAI MOSTRAR O MOTIVO REAL
                             # ---------------------------------------------------
 
-                            status.update(label=f"✅ {f.name} integrado!", state="complete")
                     st.rerun()
         st.markdown("#### 📄 Documentos Inseridos")
         if index_pinecone:
