@@ -61,7 +61,7 @@ def extract_title_from_story(story_text):
             break
     return potential_title.replace('#', '').replace('*', '').strip()[:100]
 
-# --- NOVA FUNÇÃO: INJEÇÃO FORÇADA DE CONTEXTO ---
+# --- INJEÇÃO FORÇADA DE CONTEXTO ---
 def fetch_pinecone_context(query: str) -> str:
     """Busca o contexto na Pinecone antes de acionar os Agentes"""
     if not index_pinecone: return ""
@@ -120,8 +120,26 @@ def main():
                         with st.status(f"Processando {f.name}...") as status:
                             text = extract_text_from_file(f)
                             chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_text(text)
-                            vectors = [{"id": f"{clean_filename(f.name)}_{i}", "values": get_embedding(c), "metadata": {"text": c, "source": f.name}} for i, c in enumerate(chunks)]
-                            index_pinecone.upsert(vectors=vectors, namespace=f.name)
+                            
+                            # --- CORREÇÃO: LÓGICA DE BATCHING (LOTES DE 50) ---
+                            batch_size = 50
+                            vectors = []
+                            for i, c in enumerate(chunks):
+                                vectors.append({
+                                    "id": f"{clean_filename(f.name)}_{i}", 
+                                    "values": get_embedding(c), 
+                                    "metadata": {"text": c, "source": f.name}
+                                })
+                                # Quando atingir 50, envia e limpa a lista
+                                if len(vectors) >= batch_size:
+                                    index_pinecone.upsert(vectors=vectors, namespace=f.name)
+                                    vectors = []
+                            
+                            # Envia os que sobraram no final
+                            if vectors:
+                                index_pinecone.upsert(vectors=vectors, namespace=f.name)
+                            # ---------------------------------------------------
+
                             status.update(label=f"✅ {f.name} integrado!", state="complete")
                     st.rerun()
         st.markdown("#### 📄 Documentos Inseridos")
@@ -157,11 +175,9 @@ def main():
             if len(final_input_text) > 10:
                 with st.spinner("🤖 Consultando Base e Inicializando Agentes..."):
                     
-                    # --- INJEÇÃO DE CONTEXTO ---
                     pinecone_context = fetch_pinecone_context(final_input_text)
                     
                     if pinecone_context:
-                        # Se achou algo, empacota junto com a necessidade do usuário
                         enriched_input = (
                             f"NECESSIDADE DO USUÁRIO:\n{final_input_text}\n\n"
                             f"REGRAS TÉCNICAS E CONTEXTO OBRIGATÓRIO (Base CWS):\n{pinecone_context}\n\n"
@@ -172,7 +188,6 @@ def main():
                         enriched_input = final_input_text
                         st.toast("ℹ️ Nenhuma regra técnica extra encontrada na Base.", icon="ℹ️")
 
-                    # O fluxo segue normal, mas agora com o `enriched_input`
                     agents = CWSCrewAgents(GOOGLE_API_KEY, "gemini-2.0-flash")
                     tasks = CWSCrewTasks()
                     t1 = tasks.analysis_task(agents.context_interpreter_agent(), enriched_input)
